@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# Allow running from a git checkout without installing.
+PROJECT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str((PROJECT_DIR / "src").resolve()))
+
+from mynewsalarm_app.config import (
+    config_path,
+    load_config,
+    load_status,
+    logs_dir,
+    save_config,
+    validate_alarm_time,
+)
+from mynewsalarm_app.launchagent import install_launchagent, label, uninstall_launchagent
+from mynewsalarm_app.run_once import run_once
+
+
+def _launchctl(args: list[str]) -> int:
+    proc = subprocess.run(["/bin/launchctl", *args], capture_output=True, text=True)
+    if proc.stdout.strip():
+        print(proc.stdout.strip())
+    if proc.stderr.strip():
+        print(proc.stderr.strip(), file=sys.stderr)
+    return proc.returncode
+
+
+def os_getuid() -> int:
+    return os.getuid()
+
+
+def cmd_validate_config(_: argparse.Namespace) -> int:
+    cfg = load_config()
+    hh, mm = validate_alarm_time(cfg.alarm_time)
+
+    if cfg.max_items < 3 or cfg.max_items > 20:
+        print("Config error: max_items must be between 3 and 20", file=sys.stderr)
+        return 2
+
+    if cfg.summary_sentences < 1 or cfg.summary_sentences > 6:
+        print("Config error: summary_sentences must be between 1 and 6", file=sys.stderr)
+        return 2
+
+    print("OK")
+    print(f"config: {config_path()}")
+    print(f"alarm_time: {cfg.alarm_time} (hour={hh}, minute={mm})")
+    print(f"selected_feed_ids: {cfg.selected_feed_ids}")
+    print(f"log: {logs_dir() / 'mynewsalarm.log'}")
+    return 0
+
+
+def cmd_run_once(_: argparse.Namespace) -> int:
+    cfg = load_config()
+    return run_once(cfg)
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    cfg = load_config()
+
+    app_path = Path(args.app_path).expanduser().resolve()
+    if not app_path.exists():
+        print(f"App not found: {app_path}", file=sys.stderr)
+        return 2
+
+    cfg.installed_app_path = str(app_path)
+    save_config(cfg)
+
+    log_file = logs_dir() / "mynewsalarm.log"
+    plist_path = install_launchagent(alarm_time=cfg.alarm_time, app_path=app_path, log_path=log_file)
+
+    rc = _launchctl(["bootstrap", f"gui/{os_getuid()}", str(plist_path)])
+    if rc != 0:
+        _launchctl(["load", str(plist_path)])
+
+    print(f"Installed LaunchAgent: {plist_path}")
+    print(f"Label: {label()}")
+    return 0
+
+
+def cmd_uninstall(_: argparse.Namespace) -> int:
+    _launchctl(["bootout", f"gui/{os_getuid()}/{label()}"])
+    _launchctl(["remove", label()])
+
+    plist_path = uninstall_launchagent()
+    print(f"Removed LaunchAgent plist: {plist_path}")
+    return 0
+
+
+def cmd_show_config(_: argparse.Namespace) -> int:
+    cfg_file = config_path()
+    cfg = load_config()
+    print(cfg_file)
+    print(json.dumps(cfg.__dict__, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_show_status(_: argparse.Namespace) -> int:
+    st = load_status()
+    print(json.dumps(st.__dict__, indent=2, sort_keys=True))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="mynewsalarm", description="Daily news alarm (RSS -> summary -> macOS say).")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("validate-config", help="Validate config file and print key settings.").set_defaults(fn=cmd_validate_config)
+    sub.add_parser("run-once", help="Run immediately (fetch + speak). Useful for testing.").set_defaults(fn=cmd_run_once)
+
+    p_install = sub.add_parser("install", help="Install and load LaunchAgent (uses alarm_time from config).")
+    p_install.add_argument(
+        "--app-path",
+        required=True,
+        help="Path to MyNewsAlarm.app (used by the LaunchAgent).",
+    )
+    p_install.set_defaults(fn=cmd_install)
+
+    sub.add_parser("uninstall", help="Unload and remove LaunchAgent.").set_defaults(fn=cmd_uninstall)
+    sub.add_parser("show-config", help="Print config path and current JSON.").set_defaults(fn=cmd_show_config)
+    sub.add_parser("show-status", help="Print last run status JSON.").set_defaults(fn=cmd_show_status)
+
+    args = parser.parse_args(argv)
+    return int(args.fn(args))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

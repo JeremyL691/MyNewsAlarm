@@ -1,0 +1,19 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual env
+.venv/
+
+# Build artifacts
+build/
+dist/
+*.app/
+
+# Logs
+*.log
+
+# Editor
+.vscode/
+.idea/
