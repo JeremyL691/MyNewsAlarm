@@ -12,12 +12,18 @@ class DummyLogger:
     def info(self, *_args, **_kwargs):
         return None
 
+    def debug(self, *_args, **_kwargs):
+        return None
+
+    def warning(self, *_args, **_kwargs):
+        return None
+
     def exception(self, *_args, **_kwargs):
         return None
 
 
 def test_fetch_news_from_custom_feed_file(monkeypatch, tmp_path: Path):
-    # Point the app at a local RSS file via requests.get monkeypatch.
+    # Point the app at a local RSS file via requests.Session.get monkeypatch.
     sample = Path(__file__).parent / "data" / "sample_rss.xml"
     rss_text = sample.read_text(encoding="utf-8")
 
@@ -28,12 +34,12 @@ def test_fetch_news_from_custom_feed_file(monkeypatch, tmp_path: Path):
         def raise_for_status(self):
             return None
 
-    def fake_get(_url: str, timeout: int, headers: dict[str, str]):
+    def fake_get(self, _url: str, timeout: int, headers: dict[str, str]):
         assert timeout == 15  # default AppConfig.request_timeout_sec
         assert "User-Agent" in headers
         return FakeResp(rss_text.encode("utf-8"))
 
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(requests.Session, "get", fake_get)
 
     cfg = AppConfig(
         selected_feed_ids=["custom_1"],
@@ -52,11 +58,11 @@ def test_fetch_news_from_custom_feed_file(monkeypatch, tmp_path: Path):
 def test_fetch_news_rss_timeout_increments_error_and_continues(monkeypatch):
     calls: list[str] = []
 
-    def fake_get(url: str, timeout: int, headers: dict[str, str]):
+    def fake_get(self, url: str, timeout: int, headers: dict[str, str]):
         calls.append(url)
         raise requests.Timeout("simulated")
 
-    monkeypatch.setattr(requests, "get", fake_get)
+    monkeypatch.setattr(requests.Session, "get", fake_get)
 
     cfg = AppConfig(
         selected_feed_ids=["custom_1"],
